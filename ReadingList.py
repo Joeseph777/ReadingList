@@ -7,7 +7,7 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_SAVE_PATH = os.path.join(_SCRIPT_DIR, "reading_list.json")
 
 class Book:
-    def __init__(self, title, author, year, nb_pages, OriginalLanguage, ReadingLevel=0, Rating=0, Comments=""):
+    def __init__(self, title, author, year, nb_pages, OriginalLanguage, ReadingLevel=0, Rating=0, Comments="", Genre="", Summary=""):
         self.title = title
         self.author = author
         self.year = year
@@ -16,9 +16,10 @@ class Book:
         self.Rating = Rating
         self.ReadingLevel = ReadingLevel
         self.Comments = Comments
+        
 
     def __repr__(self):        
-        return f"Book(title='{self.title}', author='{self.author}', year={self.year}, nb_pages={self.nb_pages}, OriginalLanguage='{self.OriginalLanguage}', ReadingLevel={self.ReadingLevel:.1f}%, Rating={self.Rating})"
+        return f"Book(title='{self.title}', author='{self.author}', year={self.year}, nb_pages={self.nb_pages}, OriginalLanguage='{self.OriginalLanguage}', ReadingLevel={self.ReadingLevel:.1f}%, Rating={self.Rating}), Genre='{self.Genre}'"
     
     def update_reading_level(self, pages_read):
         if self.nb_pages == 0:
@@ -44,7 +45,8 @@ class Book:
             'OriginalLanguage': self.OriginalLanguage,
             'ReadingLevel': self.ReadingLevel,
             'Rating': self.Rating,
-            'Comments': self.Comments
+            'Comments': self.Comments,
+            
         }
     
     @classmethod
@@ -57,7 +59,8 @@ class Book:
             data['OriginalLanguage'],
             data['ReadingLevel'],
             data['Rating'],
-            data['Comments']
+            data['Comments'],
+            
         )
 
 class ReadingList:
@@ -89,7 +92,9 @@ class ReadingList:
     
     def SortBooksByReadingLevel(self):
         self.books.sort(key=lambda book: book.ReadingLevel, reverse=True)
-        
+
+    def SortBooksByRating(self):
+        self.books.sort(key=lambda book: book.Rating, reverse=True)
     
     def SortBooksByAuthor(self):
         self.books.sort(key=lambda book: book.author.lower())
@@ -98,7 +103,15 @@ class ReadingList:
     def SortBooksByTitle(self):
         self.books.sort(key=lambda book: book.title.lower())
         
-    
+    def SortBooksByOriginalLanguage(self):
+        self.books.sort(key=lambda book: book.OriginalLanguage.lower())
+
+    def SortBooksByPages(self):
+        self.books.sort(key=lambda book: book.nb_pages, reverse=False)
+
+    def SortBooksByComments(self):
+        #This is an exception catch it should not be used for sorting but it is here for the sake of completeness
+        self.books.sort(key=lambda book: book.Comments, reverse=True)
     def SortBooksByYear(self):
         self.books.sort(key=lambda book: book.year, reverse=True)
     def get_unread_books(self):
@@ -122,6 +135,7 @@ class ReadingList:
         avg_rating = sum(book.Rating for book in self.books if book.Rating > 0) / len([b for b in self.books if b.Rating > 0]) if any(b.Rating > 0 for b in self.books) else 0
         
         total_pages = sum(book.nb_pages for book in self.books)
+        total_pages_read = sum((book.nb_pages) for book in self.get_completed_books()) + sum((book.nb_pages) for book in self.get_in_progress_books())
         
         return f"""
 📊 READING LIST STATISTICS
@@ -133,6 +147,7 @@ Total Books: {total_books}
 
 Average Rating: {avg_rating:.1f}/10
 Total Pages: {total_pages}
+Total Pages Read: {total_pages_read}
         """
     
     def search_books(self, query):

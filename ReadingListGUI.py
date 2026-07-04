@@ -7,6 +7,7 @@ import threading
 import hashlib
 from datetime import datetime
 from ReadingList import Book, ReadingList, DEFAULT_SAVE_PATH
+from ColorPalette import colorPalette, Palettes
 
 # ── Optional deps (cover art) ──────────────────────────────────────────────
 try:
@@ -19,23 +20,41 @@ except ImportError:
 # ── Cover cache folder lives next to the save file ────────────────────────
 _CACHE_DIR = os.path.join(os.path.dirname(DEFAULT_SAVE_PATH), "cover_cache")
 
+# ── App config (persists palette choice, window size, etc.) ───────────────
+_CONFIG_PATH = os.path.join(os.path.dirname(DEFAULT_SAVE_PATH), "app_config.json")
+
+def _load_config() -> dict:
+    """Load config from disk, returning defaults if missing or corrupt."""
+    defaults = {"palette": "Default"}
+    try:
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # Only keep known keys; silently drop anything unexpected
+        return {**defaults, **{k: v for k, v in data.items() if k in defaults}}
+    except (FileNotFoundError, json.JSONDecodeError):
+        return defaults
+
+def _save_config(data: dict) -> None:
+    """Persist config dict to disk (non-fatal on failure)."""
+    try:
+        with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except OSError:
+        pass  # Losing the palette pref is annoying, not catastrophic
+
 # ── Palette ────────────────────────────────────────────────────────────────
-BG_DARK      = "#0D1B2A"
-BG_MID       = "#1C2F45"
-BG_LIGHT     = "#243852"
-ACCENT_TEAL  = "#02C3A7"
-ACCENT_GOLD  = "#F5C842"
-TEXT_MAIN    = "#EEF2F7"
-TEXT_MUTED   = "#8FA8C0"
-GREEN        = "#3DD68C"
-RED_SOFT     = "#F06070"
-SEPARATOR    = "#1E3451"
+#BG_DARK, BG_MID, BG_LIGHT, ACCENT_TEAL, ACCENT_GOLD, TEXT_MAIN, TEXT_MUTED, GREEN, RED_SOFT, SEPARATOR = ("#0D1B2A" ,"#1C2F45","#243852", "#02C3A7" ,"#FFAE00", "#EEF2F7", "#8FA8C0", "#3DD68C","#7453EC", "#1E3451")
+
+BG_DARK, BG_MID, BG_LIGHT, ACCENT_TEAL, ACCENT_GOLD, TEXT_MAIN, TEXT_MUTED, READ, INREAD, SEPARATOR = Palettes["Default"].getPalette()
+def ChangePallete(PalletteName):
+    global BG_DARK, BG_MID, BG_LIGHT, ACCENT_TEAL, ACCENT_GOLD, TEXT_MAIN, TEXT_MUTED, READ, INREAD, SEPARATOR
+    BG_DARK, BG_MID, BG_LIGHT, ACCENT_TEAL, ACCENT_GOLD, TEXT_MAIN, TEXT_MUTED, READ, INREAD, SEPARATOR = Palettes[PalletteName].getPalette()
 
 FONT_TITLE   = ("Georgia", 22, "bold")
 FONT_HEADING = ("Georgia", 13, "bold")
 FONT_BODY    = ("Calibri", 12)
 FONT_SMALL   = ("Calibri", 10)
-FONT_MONO    = ("Consolas", 11)
+FONT_MONO    = ("Consolas", 13)
 
 COVER_W, COVER_H = 160, 240   # side panel thumbnail
 MINI_W,  MINI_H  = 80,  120   # book details dialog
@@ -77,7 +96,7 @@ def _placeholder_image(w: int, h: int, title: str):
 
 
 def fetch_cover(title: str, author: str, callback) -> None:
-    """Non-blocking: fetch cover from Open Library, call callback(path|None)."""
+    """Non-blocking: fetch cover from Google Books (primary) or Open Library (fallback)."""
     def _worker():
         path = _cover_cache_path(title, author)
         if os.path.exists(path):
@@ -86,11 +105,45 @@ def fetch_cover(title: str, author: str, callback) -> None:
         if not _COVERS_ENABLED:
             callback(None)
             return
+
+        # Helper to save image from URL
+        def save_from_url(url, callback):
+            try:
+                resp = requests.get(url, timeout=6)
+                resp.raise_for_status()
+                with open(path, "wb") as f:
+                    f.write(resp.content)
+                callback(path)
+            except Exception:
+                callback(None)
+
+        # 1. Try Google Books
+        try:
+            q = urllib.parse.quote(f"{title} {author}")
+            url = f"https://www.googleapis.com/books/v1/volumes?q={q}&maxResults=1"
+            resp = requests.get(url, timeout=6)
+            data = resp.json()
+            if "items" in data:
+                # Get best available cover (extraLarge or large)
+                cover_link = None
+                img_links = data["items"][0]["volumeInfo"].get("imageLinks", {})
+                for size in ["extraLarge", "large", "medium", "thumbnail"]:
+                    if size in img_links:
+                        cover_link = img_links[size]
+                        break
+                if cover_link:
+                    save_from_url(cover_link, callback)
+                    return
+        except Exception:
+            pass
+
+        # 2. Fallback to Open Library
         try:
             q = "+".join((title + " " + author).split())
             r = requests.get(
                 f"https://openlibrary.org/search.json?q={q}&limit=3&fields=cover_i",
-                timeout=6)
+                timeout=6
+            )
             r.raise_for_status()
             cover_id = None
             for doc in r.json().get("docs", []):
@@ -98,18 +151,16 @@ def fetch_cover(title: str, author: str, callback) -> None:
                     cover_id = doc["cover_i"]
                     break
             if cover_id:
-                ir = requests.get(
-                    f"https://covers.openlibrary.org/b/id/{cover_id}-M.jpg",
-                    timeout=8)
-                ir.raise_for_status()
-                with open(path, "wb") as f:
-                    f.write(ir.content)
-                callback(path)
-            else:
-                callback(None)
+                cover_url = f"https://covers.openlibrary.org/b/id/{cover_id}-L.jpg"
+                save_from_url(cover_url, callback)
+                return
         except Exception:
-            callback(None)
+            pass
+
+        callback(None)
+
     threading.Thread(target=_worker, daemon=True).start()
+
 
 
 def load_tk_image(path_or_none, w: int, h: int, title: str = ""):
@@ -132,15 +183,17 @@ def load_tk_image(path_or_none, w: int, h: int, title: str = ""):
 # ══════════════════════════════════════════════════════════════════════════
 
 class StyledButton(tk.Button):
-    def __init__(self, parent, text, command, bg=ACCENT_TEAL, fg=BG_DARK,
+    def __init__(self, parent, text, command, bg=None, fg=None,
                  font=("Calibri", 12, "bold"), padx=14, pady=5, **kw):
+        _bg = bg if bg is not None else ACCENT_TEAL
+        _fg = fg if fg is not None else BG_DARK
         super().__init__(parent, text=text, command=command,
-                         bg=bg, fg=fg, font=font,
+                         bg=_bg, fg=_fg, font=font,
                          activebackground=ACCENT_GOLD, activeforeground=BG_DARK,
                          relief="flat", cursor="hand2",
                          padx=padx, pady=pady, bd=0, **kw)
         self.bind("<Enter>", lambda e: self.config(bg=ACCENT_GOLD, fg=BG_DARK))
-        self.bind("<Leave>", lambda e: self.config(bg=bg, fg=fg))
+        self.bind("<Leave>", lambda e: self.config(bg=_bg, fg=_fg))
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -151,8 +204,15 @@ class ReadingListGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Personal Reading List — ISI 2025–2026")
-        self.root.geometry("1280x720")
+        self.root.geometry("1280x700")
         self.root.minsize(960, 600)
+
+        # ── Restore last-used palette before anything is drawn ────────────
+        self._config = _load_config()
+        saved_palette = self._config.get("palette", "Default")
+        if saved_palette in Palettes:
+            ChangePallete(saved_palette)
+
         self.root.configure(bg=BG_DARK)
 
         self.reading_list = ReadingList()
@@ -222,6 +282,7 @@ class ReadingListGUI:
             ("⭐  Rate Book",        self.rate_book_dialog),
             ("🗑️  Delete Book",      self.delete_selected),
             ("🔄  Sort",             self.sort_dialog),
+            (" CHANGE PALETTE ",       self.palette_dialog)
         ]:
             b = tk.Button(sb, text=label, command=cmd,
                           bg=BG_DARK, fg=TEXT_MAIN, font=FONT_BODY,
@@ -257,6 +318,8 @@ class ReadingListGUI:
                      bg=BG_MID, fg=ACCENT_TEAL).grid(row=0, column=2, padx=(0,6), pady=14, sticky="e")
         StyledButton(header, "📄  Export PDF", self.export_pdf,
                      bg=ACCENT_GOLD, fg= BG_MID).grid(row=0, column=3, padx=(0,6), pady=14, sticky="e")
+        StyledButton(header,"Load Reading List", lambda: self._browse_file("ReadingList", "r"),
+                     bg=BG_MID, fg=ACCENT_TEAL).grid(row=0, column=5, padx=(0,6), pady=14, sticky="e")
         sf = tk.Frame(header, bg=BG_DARK)
         sf.grid(row=0, column=4, padx=20, pady=14, sticky="e")
         tk.Label(sf, text="🔍", font=("Calibri", 13),
@@ -323,16 +386,16 @@ class ReadingListGUI:
         vsb.grid(row=0, column=1, sticky="ns")
         self.tree.configure(yscrollcommand=vsb.set)
 
-        widths = {"Title":220,"Author":150,"Year":55,"Language":85,
-                  "Pages":60,"Progress":125,"Rating":70,"Notes":55}
+        widths = {"Title":220,"Author":150,"Year":50,"Language":80,
+                  "Pages":50,"Progress":150,"Rating":70,"Notes":50}
         for col in cols:
             self.tree.heading(col, text=col,
                               command=lambda c=col: self._sort_by_col(c))
             self.tree.column(col, width=widths.get(col,100),
                              anchor="w" if col=="Title" else "center")
 
-        self.tree.tag_configure("completed",   background="#1A3D2B")
-        self.tree.tag_configure("in_progress", background="#2A2D18")
+        self.tree.tag_configure("completed",   background=READ)
+        self.tree.tag_configure("in_progress", background=INREAD)
         self.tree.tag_configure("unread",      background=BG_MID)
         self.tree.tag_configure("odd",         background=BG_LIGHT)
         self.tree.bind("<Double-1>", self.show_book_details)
@@ -383,6 +446,12 @@ class ReadingListGUI:
                  anchor="w", padx=16, pady=5).grid(row=3, column=0, sticky="ew")
 
     # ─────────────────────────── Cover panel ──────────────────────────────
+    def _clear_cover_cache(self):
+        if os.path.exists(_CACHE_DIR):
+            for fname in os.listdir(_CACHE_DIR):
+                path = os.path.join(_CACHE_DIR, fname)
+                if os.path.isfile(path):
+                    os.remove(path)
     def _show_placeholder_cover(self):
         if not _COVERS_ENABLED or self._cover_panel is None:
             return
@@ -449,6 +518,16 @@ class ReadingListGUI:
             if messagebox.askyesno("Load Data",
                                    "A saved reading list was found.\nLoad it?"):
                 self.reading_list.load_from_file()
+    def _browse_file(self, title, mode="r"):
+        if mode == "r":
+            path = filedialog.askopenfilename(title=title,
+                                              filetypes=[("JSON Files", "*.json")])
+        else:
+            path = filedialog.asksaveasfilename(title=title, defaultextension=".json",
+                                                filetypes=[("JSON Files", "*.json")])
+        if path:
+            self.reading_list.load_from_file(path) if mode == "r" else self.reading_list.save_to_file(path)
+            self.refresh()
 
     def refresh(self):
         for item in self.tree.get_children():
@@ -501,7 +580,9 @@ class ReadingListGUI:
 
     def _sort_by_col(self, col):
         mapping = {"Title":"SortBooksByTitle","Author":"SortBooksByAuthor",
-                   "Year":"SortBooksByYear","Progress":"SortBooksByReadingLevel"}
+                   "Year":"SortBooksByYear","Progress":"SortBooksByReadingLevel","Rating":"SortBooksByRating",
+                   "Language":"SortBooksByOriginalLanguage","Pages":"SortBooksByPages",
+                   "Notes":"SortBooksByComments"}
         if col in mapping:
             getattr(self.reading_list, mapping[col])()
             self.refresh()
@@ -544,7 +625,32 @@ class ReadingListGUI:
                          relief="flat", bd=0, width=28)
         entry.grid(row=row, column=1, sticky="ew", pady=6, ipady=5, padx=4)
         return var
+    def _rebuild_ui(self):
+        """Destroy all widgets and rebuild with the current palette globals."""
+        for widget in self.root.winfo_children():
+            widget.destroy()
+        self._photo_cache.clear()
+        self._current_cover_key = None
+        self._build_layout()
+        self.refresh()
 
+    def palette_dialog(self):
+        d = self._make_dialog("Change Color Palette", 360, 60 + 46 * len(Palettes))
+        #Add a slider to browse through palettes
+        
+        tk.Label(d, text="Select a Color Palette", font=FONT_HEADING,
+                 bg=BG_DARK, fg=ACCENT_TEAL).pack(pady=(16, 12), padx=20)
+        
+        for name in Palettes:
+            def handler(n=name, dlg=d):
+                ChangePallete(n)
+                # ── Persist the choice so it survives restart ─────────────
+                self._config["palette"] = n
+                _save_config(self._config)
+                dlg.destroy()
+                self._rebuild_ui()
+            StyledButton(d, name, handler, bg=BG_MID, fg=TEXT_MAIN).pack(fill="x", padx=40, pady=4)
+            
     def add_book_dialog(self):
         d = self._make_dialog("Add New Book", 460, 380)
         tk.Label(d, text="Add New Book", font=FONT_HEADING,
@@ -702,8 +808,8 @@ class ReadingListGUI:
         if not res: return
         _, book = res
 
-        d_w = 640 if _COVERS_ENABLED else 520
-        d_h = 520 if _COVERS_ENABLED else 460
+        d_w = 800 if _COVERS_ENABLED else 600
+        d_h = 600 if _COVERS_ENABLED else 520
         d = self._make_dialog("Book Details", d_w, d_h)
 
         # Top: cover + title
@@ -758,8 +864,8 @@ class ReadingListGUI:
                      bg=BG_DARK, fg=TEXT_MAIN, anchor="w").pack(side="left")
 
         tk.Label(d, text="Notes & Comments", font=("Calibri",10,"bold"),
-                 bg=BG_DARK, fg=TEXT_MUTED).pack(anchor="w", padx=20, pady=(12,4))
-        txt = ScrolledText(d, wrap="word", width=64, height=6,
+                 bg=BG_DARK, fg=TEXT_MUTED).pack(anchor="w", padx=15, pady=(12,4))
+        txt = ScrolledText(d, wrap="word", width=64, height=10,
                            bg=BG_MID, fg=TEXT_MAIN, font=FONT_MONO,
                            insertbackground=TEXT_MAIN, relief="flat", bd=0)
         txt.pack(padx=20, fill="x")
@@ -779,7 +885,7 @@ class ReadingListGUI:
         StyledButton(btn_row, "Close", d.destroy, bg=BG_MID, fg=TEXT_MAIN).pack(side="left", padx=6)
 
     def sort_dialog(self):
-        d = self._make_dialog("Sort Books", 300, 260)
+        d = self._make_dialog("Sort Books", 300, 430)
         tk.Label(d, text="Sort books by", font=FONT_HEADING,
                  bg=BG_DARK, fg=ACCENT_TEAL).pack(pady=(16, 12))
         for label, cmd in [
@@ -787,24 +893,30 @@ class ReadingListGUI:
             ("✍️  Author",        self.reading_list.SortBooksByAuthor),
             ("📅  Year",          self.reading_list.SortBooksByYear),
             ("📊  Reading Level", self.reading_list.SortBooksByReadingLevel),
+            ("⭐  Rating",        self.reading_list.SortBooksByRating),
+            ("🗣️  Language",      self.reading_list.SortBooksByOriginalLanguage),
+            ("📄  Pages",         self.reading_list.SortBooksByPages),
+            ("💬  Comments",      self.reading_list.SortBooksByComments)
         ]:
             StyledButton(d, label, lambda c=cmd: [c(), self.refresh(), d.destroy()],
                          bg=BG_MID, fg=TEXT_MAIN).pack(fill="x", padx=30, pady=4)
 
     def show_statistics(self):
         bs = self.reading_list.books
+        rbs = self.reading_list.get_completed_books()
         if not bs:
             messagebox.showinfo("Statistics", "No books in your list yet!")
             return
-        comp   = len(self.reading_list.get_completed_books())
+        comp   = len(rbs)
         prog   = len(self.reading_list.get_in_progress_books())
         unread = len(self.reading_list.get_unread_books())
         pages  = sum(b.nb_pages for b in bs)
+        read_pages = sum(b.nb_pages for b in rbs) + sum(int(b.ReadingLevel/100 * b.nb_pages) for b in self.reading_list.get_in_progress_books())
         rated  = [b.Rating for b in bs if b.Rating > 0]
         avg    = f"{sum(rated)/len(rated):.1f}/10" if rated else "No ratings yet"
         top    = max(bs, key=lambda b: b.Rating, default=None)
 
-        d = self._make_dialog("Reading Statistics", 440, 360)
+        d = self._make_dialog("Reading Statistics", 460, 400)
         tk.Label(d, text="📊 Statistics", font=FONT_HEADING,
                  bg=BG_DARK, fg=ACCENT_TEAL).pack(pady=(16,4), padx=20, anchor="w")
         tk.Frame(d, bg=ACCENT_TEAL, height=2).pack(fill="x", padx=20, pady=4)
@@ -812,7 +924,8 @@ class ReadingListGUI:
         frame.pack(fill="x", pady=4)
         stats = [("Total Books", str(len(bs))), ("Completed", str(comp)),
                  ("In Progress", str(prog)), ("Unread", str(unread)),
-                 ("Total Pages", f"{pages:,}"), ("Average Rating", avg)]
+                 ("Total Pages", f"{pages:,}"), ("Pages Read", f"{read_pages:,}"),
+                ("Average Rating", avg)]
         if top:
             stats.append(("Top Rated", f"{top.title} ({top.Rating}/10)"))
         for label, val in stats:
@@ -864,34 +977,37 @@ class ReadingListGUI:
             initialfile=default_name)
         if not path:
             return
+        #BG_DARK, BG_MID, BG_LIGHT, ACCENT_TEAL, ACCENT_GOLD, TEXT_MAIN, TEXT_MUTED, GREEN, RED_SOFT, SEPARATOR = ("#0D1B2A" ,"#1C2F45","#243852", "#02C3A7" ,"#FFAE00", "#EEF2F7", "#8FA8C0", "#3DD68C","#7453EC", "#1E3451")
+        # ----- Colors (same as yours) -----
+        C_DARK  = colors.HexColor(BG_DARK)
+        C_MID   = colors.HexColor(BG_MID)
+        C_LIGHT = colors.HexColor(BG_LIGHT)
+        C_TEAL  = colors.HexColor(ACCENT_TEAL)
+        C_GOLD  = colors.HexColor(ACCENT_GOLD)
+        C_TEXT  = colors.HexColor(TEXT_MAIN)
+        C_MUTED = colors.HexColor(TEXT_MUTED)
+        C_GREEN = colors.HexColor(READ)
+        C_PROG  = colors.HexColor(INREAD)
 
-        C_DARK  = colors.HexColor("#0D1B2A")
-        C_MID   = colors.HexColor("#1C2F45")
-        C_LIGHT = colors.HexColor("#243852")
-        C_TEAL  = colors.HexColor("#02C3A7")
-        C_GOLD  = colors.HexColor("#F5C842")
-        C_TEXT  = colors.HexColor("#EEF2F7")
-        C_MUTED = colors.HexColor("#8FA8C0")
-        C_GREEN = colors.HexColor("#1A3D2B")
-        C_PROG  = colors.HexColor("#2A2D18")
-
+        # ----- Paragraph styles -----
         ts = ParagraphStyle("T", fontName="Helvetica-Bold", fontSize=22,
-                             textColor=C_TEAL, alignment=TA_CENTER, spaceAfter=4)
+                            textColor=C_TEAL, alignment=TA_CENTER, spaceAfter=15)
         ss = ParagraphStyle("S", fontName="Helvetica", fontSize=10,
-                             textColor=C_MUTED, alignment=TA_CENTER, spaceAfter=16)
-        sec_s  = ParagraphStyle("Sc",fontName="Helvetica-Bold",fontSize=13,
-                                textColor=C_GOLD,spaceBefore=18,spaceAfter=6)
-        body_s = ParagraphStyle("B", fontName="Helvetica",fontSize=9,
-                                textColor=C_TEXT,leading=13)
-        cmt_s  = ParagraphStyle("C", fontName="Helvetica-Oblique",fontSize=8,
-                                textColor=C_MUTED,leading=11,leftIndent=8)
-        hdr_s  = ParagraphStyle("H", fontName="Helvetica-Bold",fontSize=8,
+                            textColor=C_MUTED, alignment=TA_CENTER, spaceAfter=16)
+        sec_s  = ParagraphStyle("Sc", fontName="Helvetica-Bold", fontSize=13,
+                                textColor=C_GOLD, spaceBefore=18, spaceAfter=6)
+        body_s = ParagraphStyle("B", fontName="Helvetica", fontSize=9,
+                                textColor=C_TEXT, leading=13)
+        cmt_s  = ParagraphStyle("C", fontName="Helvetica-Oblique", fontSize=12,
+                                textColor=C_MUTED, leading=12, leftIndent=12, rightIndent=12)
+        hdr_s  = ParagraphStyle("H", fontName="Helvetica-Bold", fontSize=8,
                                 textColor=C_TEAL)
 
         doc = SimpleDocTemplate(path, pagesize=A4,
                                 leftMargin=1.8*cm, rightMargin=1.8*cm,
                                 topMargin=2*cm, bottomMargin=2*cm)
 
+        # ----- Dark background for every page -----
         def dark_bg(canvas, doc):
             canvas.saveState()
             canvas.setFillColor(C_DARK)
@@ -903,6 +1019,7 @@ class ReadingListGUI:
             canvas.drawRightString(A4[0]-1.8*cm, 1.2*cm, f"Page {doc.page}")
             canvas.restoreState()
 
+        # ----- Prepare statistics -----
         bs      = self.reading_list.books
         comp    = len(self.reading_list.get_completed_books())
         prog    = len(self.reading_list.get_in_progress_books())
@@ -911,12 +1028,13 @@ class ReadingListGUI:
         avg_r   = f"{sum(rated)/len(rated):.1f}/10" if rated else "—"
         total_p = sum(b.nb_pages for b in bs)
 
-        story = [Spacer(1, 0.4*cm)]
+        # ----- Build the story (list of flowables) -----
+        story = [Spacer(1, 0.3*cm)]
         story.append(Paragraph("📚  Personal Reading List", ts))
-        story.append(Paragraph(
-            f"ISI · 2025–2026  ·  Exported {datetime.now().strftime('%d %B %Y')}", ss))
+        story.append(Paragraph(f"ISI · 2025–2026  ·  Exported {datetime.now().strftime('%d %B %Y')}", ss))
         story.append(HRFlowable(width="100%", thickness=1, color=C_TEAL, spaceAfter=12))
 
+        # Statistics table
         stat_data = [[
             Paragraph(f"<b>{len(bs)}</b><br/>Total", body_s),
             Paragraph(f"<b>{comp}</b><br/>Completed", body_s),
@@ -938,7 +1056,39 @@ class ReadingListGUI:
         story.append(stat_tbl)
         story.append(Spacer(1, 0.5*cm))
 
+        # ----- Column widths for the mini‑tables (one row each) -----
         col_w = [6.5*cm, 3.5*cm, 1.5*cm, 2*cm, 2.5*cm, 2.5*cm]
+
+        # Helper to create a one‑row table for a single book
+        def make_book_table(book, row_bg):
+            filled = int(book.ReadingLevel / 10)
+            bar = "█"*filled + "░"*(10-filled) + f" {book.ReadingLevel:.0f}%"
+            rating = f"{book.Rating}/10" if book.Rating > 0 else "—"
+            row = [
+                Paragraph(book.title, body_s),
+                Paragraph(book.author, body_s),
+                Paragraph(str(book.year), body_s),
+                Paragraph(book.OriginalLanguage, body_s),
+                Paragraph(bar, ParagraphStyle("bar", fontName="Courier",
+                        fontSize=7, textColor=C_TEAL)),
+                Paragraph(rating, body_s),
+            ]
+            tbl = Table([row], colWidths=col_w, splitByRow=1)
+            tbl.setStyle(TableStyle([
+                ("BACKGROUND",   (0,0),(-1,0), row_bg),
+                ("TEXTCOLOR",    (0,0),(-1,0), C_TEXT),
+                ("FONTNAME",     (0,0),(-1,0), "Helvetica"),
+                ("FONTSIZE",     (0,0),(-1,0), 8),
+                ("ALIGN",        (2,0),(-1,0), "CENTER"),
+                ("VALIGN",       (0,0),(-1,0), "TOP"),
+                ("TOPPADDING",   (0,0),(-1,0), 5),
+                ("BOTTOMPADDING",(0,0),(-1,0), 5),
+                ("BOX",          (0,0),(-1,0), 0.4, C_LIGHT),
+                ("INNERGRID",    (0,0),(-1,-1), 0.4, C_LIGHT),
+            ]))
+            return tbl
+
+        # Process each section (Completed, In Progress, Unread)
         for sec_title, books, row_bg in [
             ("✅  Completed",   self.reading_list.get_completed_books(),   C_GREEN),
             ("📖  In Progress", self.reading_list.get_in_progress_books(), C_PROG),
@@ -947,53 +1097,30 @@ class ReadingListGUI:
             if not books:
                 continue
             story.append(Paragraph(sec_title, sec_s))
-            rows = [[Paragraph(h, hdr_s) for h in
-                     ("Title","Author","Year","Language","Progress","Rating")]]
-            for book in books:
-                filled = int(book.ReadingLevel / 10)
-                bar    = "█"*filled + "░"*(10-filled) + f" {book.ReadingLevel:.0f}%"
-                rating = f"{book.Rating}/10" if book.Rating > 0 else "—"
-                rows.append([
-                    Paragraph(book.title, body_s),
-                    Paragraph(book.author, body_s),
-                    Paragraph(str(book.year), body_s),
-                    Paragraph(book.OriginalLanguage, body_s),
-                    Paragraph(bar, ParagraphStyle("bar", fontName="Courier",
-                               fontSize=7, textColor=C_TEAL)),
-                    Paragraph(rating, body_s),
-                ])
-                if book.Comments.strip():
-                    rows.append([
-                        Paragraph(f"💬  {book.Comments.strip()[:300]}", cmt_s),
-                        "","","","",""])
 
-            tbl_style = [
-                ("BACKGROUND",   (0,0),(-1,0),  C_LIGHT),
-                ("BACKGROUND",   (0,1),(-1,-1), row_bg),
-                ("TEXTCOLOR",    (0,1),(-1,-1), C_TEXT),
-                ("FONTNAME",     (0,0),(-1,0),  "Helvetica-Bold"),
-                ("FONTSIZE",     (0,0),(-1,-1), 8),
-                ("ALIGN",        (2,0),(-1,-1), "CENTER"),
-                ("VALIGN",       (0,0),(-1,-1), "TOP"),
-                ("TOPPADDING",   (0,0),(-1,-1), 5),
-                ("BOTTOMPADDING",(0,0),(-1,-1), 5),
-                ("GRID",         (0,0),(-1,-1), 0.4, C_LIGHT),
-            ]
-            cmt_rows = [i for i,r in enumerate(rows)
-                        if isinstance(r[0], Paragraph)
-                        and r[0].text.startswith("💬") and r[1]==""]
-            for cr in cmt_rows:
-                tbl_style += [("SPAN",(0,cr),(-1,cr)),
-                              ("BACKGROUND",(0,cr),(-1,cr),C_DARK)]
-            tbl = Table(rows, colWidths=col_w, repeatRows=1)
-            tbl.setStyle(TableStyle(tbl_style))
-            story.append(tbl)
+            for book in books:
+                # Add the book's mini‑table
+                story.append(make_book_table(book, row_bg))
+                # Add the comment immediately after, if any
+                if book.Comments.strip():
+                    story.append(Spacer(1, 0.1*cm))
+                    comment_text = book.Comments.strip()
+                    # Escape XML special chars and convert newlines to <br/>
+                    import xml.sax.saxutils as saxutils
+                    comment_text = saxutils.escape(comment_text)
+                    comment_text = comment_text.replace('\n', '<br/>')
+                    comment_text = f"💬  {comment_text}"
+                    story.append(Paragraph(comment_text, cmt_s))
+                    story.append(Spacer(1, 0.2*cm))
+                else:
+                    story.append(Spacer(1, 0.1*cm))
+
             story.append(Spacer(1, 0.3*cm))
 
+        # Build the PDF
         doc.build(story, onFirstPage=dark_bg, onLaterPages=dark_bg)
         self.status_var.set(f"📄 Exported → {os.path.basename(path)}")
         messagebox.showinfo("Export Complete", f"PDF saved to:\n{path}", parent=self.root)
-
 
 def main():
     root = tk.Tk()
