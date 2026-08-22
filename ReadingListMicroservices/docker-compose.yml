@@ -1,0 +1,36 @@
+services:
+  auth:
+    build: ./AuthService
+    env_file: ./AuthService/.env
+    volumes:
+      - auth_data:/app/data
+    restart: unless-stopped
+    # No `ports:` here on purpose — only nginx is reachable from outside
+    # the Docker network. AuthService is only reachable at http://auth:8000
+    # from other containers on this network.
+
+  library:
+    build: ./LibraryService
+    env_file: ./LibraryService/.env
+    volumes:
+      - library_data:/app/data
+    restart: unless-stopped
+    depends_on:
+      - auth
+    # Same deal — only reachable internally, at http://library:8001.
+
+  web:
+    image: nginx:alpine
+    volumes:
+      - ./WebApp:/usr/share/nginx/html:ro
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "80:80"
+    restart: unless-stopped
+    depends_on:
+      - auth
+      - library
+
+volumes:
+  auth_data:
+  library_data:
