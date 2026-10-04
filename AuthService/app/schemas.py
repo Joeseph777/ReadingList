@@ -35,9 +35,17 @@ class UserLogin(BaseModel):
 class UserOut(BaseModel):
     id: int
     username: str
-    email: str
+    email: EmailStr
+
     is_admin: bool
     created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class UserSearchOut(BaseModel):
+    id: int
+    username: str
 
     class Config:
         from_attributes = True
@@ -53,7 +61,6 @@ class FriendUser(BaseModel):
     friendship_id: int
     id: int
     username: str
-    email: str
 
 class FriendsList(BaseModel):
     friends: list[FriendUser]

@@ -11,7 +11,7 @@ from typing import List, Optional
 from ..database import get_db
 from ..models import User, Friendship, PasswordResetToken
 from ..schemas import (
-    UserCreate, UserLogin, UserOut, Token, FriendsList, FriendUser, RespondRequest,
+    UserCreate, UserLogin, UserOut, UserSearchOut, Token, FriendsList, FriendUser, RespondRequest,
     ForgotPasswordRequest, ResetPasswordRequest, AdminStatusUpdate, ChangePasswordRequest
 )
 from ..auth import verify_password, get_password_hash, create_access_token
@@ -143,9 +143,9 @@ def reset_password(request: Request, body: ResetPasswordRequest, db: Session = D
 def list_users(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
     return db.query(User).order_by(User.id).all()
 
-# Any logged-in user can search/browse other users — this is how you find people to
-# friend. Deliberately lighter than /users: no admin gate, but capped result size.
-@router.get("/search", response_model=List[UserOut])
+# Any logged-in user can search for people to friend. Keep the response limited to
+# public identifying information; /users retains full details for admins.
+@router.get("/search", response_model=List[UserSearchOut])
 def search_users(q: str = Query(..., min_length=2), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     query = db.query(User).filter(
         User.id != current_user.id,
@@ -268,7 +268,7 @@ def list_friends(current_user: User = Depends(get_current_user), db: Session = D
         other = db.query(User).filter(User.id == other_id).first()
         if not other:
             continue
-        entry = FriendUser(friendship_id=f.id, id=other.id, username=other.username, email=other.email)
+        entry = FriendUser(friendship_id=f.id, id=other.id, username=other.username)
         if f.status == "accepted":
             friends.append(entry)
         elif f.status == "pending" and f.addressee_id == current_user.id:

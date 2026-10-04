@@ -980,7 +980,7 @@ function renderFriendsView() {
       ? `<div class="empty-state"><div class="stamp">no friends yet</div><p>Send a request from "Find people" to get started.</p></div>`
       : state.friends.friends.map((f) => `
           <div class="book-card" style="grid-template-columns: 1fr auto;">
-            <div class="book-main"><div class="title-row"><span class="title">${escapeHtml(f.username)}</span></div><div class="author">${escapeHtml(f.email)}</div></div>
+            <div class="book-main"><div class="title-row"><span class="title">${escapeHtml(f.username)}</span></div></div>
             <div class="card-actions">
               <button class="btn small" onclick="viewFriendShelf(${f.id}, '${escapeAttr(f.username)}')">View shelf</button>
               <button class="icon-btn" title="Remove friend" onclick="removeFriendship(${f.friendship_id}, '${escapeAttr(f.username)}')">🗑️</button>
@@ -1044,7 +1044,7 @@ function renderFriendSearchResults() {
     ? `<div class="empty-state"><div class="stamp">${state.friendSearch ? "no matches" : "nobody left"}</div><p>${state.friendSearch ? "Try a different search." : "Everyone's already your friend or has a pending request."}</p></div>`
     : candidates.map((u) => `
         <div class="book-card" style="grid-template-columns: 1fr auto;">
-          <div class="book-main"><div class="title-row"><span class="title">${escapeHtml(u.username)}</span></div><div class="author">${escapeHtml(u.email)}</div></div>
+          <div class="book-main"><div class="title-row"><span class="title">${escapeHtml(u.username)}</span></div></div>
           <div class="card-actions">
             <button class="btn small" onclick="sendFriendRequest('${escapeAttr(u.username)}')">Add friend</button>
           </div>
