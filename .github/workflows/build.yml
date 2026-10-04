@@ -1,0 +1,25 @@
+name: Build
+
+on:
+  push:
+    branches: [webapp-clean]
+  pull_request:
+
+jobs:
+  build-auth:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build AuthService image
+        run: docker build -t auth-test ./AuthService
+      - name: Verify app imports
+        run: docker run --rm auth-test python -c "from app.main import app; print('AuthService OK')"
+
+  build-library:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build LibraryService image
+        run: docker build -t library-test ./LibraryService
+      - name: Verify app imports
+        run: docker run --rm library-test python -c "from app.main import app; print('LibraryService OK')"
